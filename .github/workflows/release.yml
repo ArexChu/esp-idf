@@ -1,0 +1,82 @@
+name: Build ESP-IDF Examples
+
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    name: Build ${{ matrix.example }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        example:
+          - examples/get-started/hello_world
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive 
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build dfu-util
+
+      - name: Cache ESP-IDF environment
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.espressif
+            ~/.cache/pip
+          key: esp-idf-env-${{ runner.os }}
+          restore-keys: |
+            esp-idf-env-
+
+      - name: Set up ESP-IDF (install if not cached)
+        run: |
+          if [ ! -d "$HOME/.espressif" ]; then
+            echo "ESP-IDF not found in cache. Installing..."
+            ./install.sh esp32c3
+          else
+            echo "ESP-IDF found in cache. Skipping installation."
+          fi
+
+      - name: Build example (${{ matrix.example }})
+        run: |
+          source ./export.sh
+          pip install pydantic==2.11.10 --force-reinstall
+          cd ${{ matrix.example }}
+          idf.py set-target esp32c3
+          idf.py --verbose build
+      
+      - name: Upload full build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp-idf-build-logs
+          path: ${{ matrix.example }}/build/log/*
+
+      - name: Prepare artifact name
+        id: artifactname
+        run: |
+          artifact_name=$(echo "${{ matrix.example }}" | tr '/' '_')
+          echo "artifact_name=$artifact_name" >> $GITHUB_ENV
+        shell: bash
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.artifact_name }}
+          path: ${{ matrix.example }}/build/*.bin
+
+      - name: Upload binary to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v5.5.1-${{ github.run_number }}"
+          files: ${{ matrix.example }}/build/*.bin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
